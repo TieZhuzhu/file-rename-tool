@@ -22,11 +22,11 @@ public class FileRenameTool {
     private static final Stack<List<RenamePair>> HISTORY = new Stack<>();
 
     // 常量定义
-    private static final int MIN_CHOICE = 1;  // 最小模式编号
+    private static final int MIN_CHOICE = 0;  // 最小模式编号（0为切换目录）
     private static final int MAX_CHOICE = 8;  // 最大模式编号
     private static final String YEAR_PATTERN = "19\\d{2}|20\\d{2}";  // 年份匹配正则表达式（1900-2099）
     private static final String[] EXCLUDED_EXTENSIONS = {".exe", ".java"};  // 需要排除的文件扩展名
-    private static final String EXCLUDED_CLASS = "FileTransNameTest.class";  // 需要排除的特定类文件
+    private static final String EXCLUDED_CLASS = "FileRenameTool.class";  // 需要排除的特定类文件
 
     /**
      * 重命名对，用于记录文件重命名操作
@@ -45,17 +45,14 @@ public class FileRenameTool {
 
     /**
      * 主方法
+     * 支持从命令行参数读取路径（拖入文件/文件夹时会自动传入）
      *
-     * @param args 命令行参数
+     * @param args 命令行参数，第一个参数为路径（可选）
      */
     public static void main(String[] args) {
-        // 获取当前工作目录路径
-        String folderPath = new File(".").getAbsolutePath();
-        // 移除路径末尾的 "." 字符
-        if (folderPath.endsWith(".")) {
-            folderPath = folderPath.substring(0, folderPath.length() - 2);
-        }
-        File folder = new File(folderPath);
+        // 初始化工作目录：优先使用命令行参数，否则使用当前目录
+        File folder = initializeWorkingDirectory(args);
+        String folderPath = folder.getAbsolutePath();
 
         // 主循环：持续显示菜单并处理用户输入
         while (true) {
@@ -75,10 +72,19 @@ public class FileRenameTool {
                 continue;
             }
 
-            // 解析数字输入并执行对应的重命名模式
+            // 解析数字输入并执行对应的操作
             try {
                 int choice = Integer.parseInt(input);
-                if (choice >= MIN_CHOICE && choice <= MAX_CHOICE) {
+                if (choice == 0) {
+                    // 选项0：切换工作目录
+                    File newFolder = changeDirectory();
+                    if (newFolder != null) {
+                        folder = newFolder;
+                        folderPath = folder.getAbsolutePath();
+                        System.out.println(">>> 已切换到: " + folderPath);
+                    }
+                } else if (choice >= 1 && choice <= MAX_CHOICE) {
+                    // 选项1-8：执行重命名操作
                     prepareRename(folder, choice);
                 } else {
                     System.out.println("请输入 " + MIN_CHOICE + "-" + MAX_CHOICE + " 之间的数字！");
@@ -96,8 +102,9 @@ public class FileRenameTool {
      */
     private static void printMenu(String folderPath) {
         System.out.println("\n========================================");
-        System.out.println("   批量替换工具 - 当前目录: " + folderPath);
+        System.out.println("   批量替换工具 - 当前目录/文件: " + folderPath);
         System.out.println("========================================");
+        System.out.println("0. 切换工作目录/文件");
         System.out.println("1. 匹配年份 (19xx/20xx) -> 前置 [年份]");
         System.out.println("2. 匹配前 N 位字符");
         System.out.println("3. 匹配后 N 位字符");
@@ -110,6 +117,116 @@ public class FileRenameTool {
         System.out.println("u. 回退上一步操作 (undo)");
         System.out.println("q. 退出程序 (quit)");
         System.out.print("请选择模式: ");
+    }
+
+    /**
+     * 初始化工作目录
+     * 优先使用命令行参数，如果没有参数则使用当前目录
+     *
+     * @param args 命令行参数
+     * @return 工作目录的 File 对象
+     */
+    private static File initializeWorkingDirectory(String[] args) {
+        // 如果有命令行参数，使用第一个参数作为路径
+        if (args != null && args.length > 0 && args[0] != null && !args[0].trim().isEmpty()) {
+            File dir = validateAndGetDirectory(args[0]);
+            if (dir != null) {
+                return dir;
+            }
+            // 如果路径无效，提示并继续使用当前目录
+            System.out.println("警告: 命令行参数路径无效，使用当前目录。");
+        }
+        
+        // 默认使用当前工作目录
+        String folderPath = new File(".").getAbsolutePath();
+        // 移除路径末尾的 "." 字符
+        if (folderPath.endsWith(".")) {
+            folderPath = folderPath.substring(0, folderPath.length() - 2);
+        }
+        return new File(folderPath);
+    }
+
+    /**
+     * 切换工作目录
+     * 允许用户输入或拖入路径（支持文件或文件夹）
+     *
+     * @return 新的工作目录 File 对象，如果取消或失败则返回 null
+     */
+    private static File changeDirectory() {
+        System.out.print("请输入目录/文件路径（可直接拖入文件或文件夹）: ");
+        String input = SCANNER.nextLine().trim();
+        
+        if (input.isEmpty()) {
+            System.out.println(">>> 操作已取消。");
+            return null;
+        }
+        
+        // 规范化路径（去除引号等）
+        String normalizedPath = normalizePath(input);
+        File dir = validateAndGetDirectory(normalizedPath);
+        
+        if (dir != null) {
+            return dir;
+        } else {
+            System.out.println(">>> 路径无效或不存在，请检查后重试。");
+            return null;
+        }
+    }
+
+    /**
+     * 规范化路径
+     * 去除路径两端的引号和空格（Windows拖入文件时会自动加引号）
+     *
+     * @param path 原始路径
+     * @return 规范化后的路径
+     */
+    private static String normalizePath(String path) {
+        if (path == null) {
+            return "";
+        }
+        
+        // 去除首尾空格
+        path = path.trim();
+        
+        // 去除首尾的引号（支持单引号和双引号）
+        if ((path.startsWith("\"") && path.endsWith("\"")) ||
+            (path.startsWith("'") && path.endsWith("'"))) {
+            path = path.substring(1, path.length() - 1);
+        }
+        
+        return path.trim();
+    }
+
+    /**
+     * 验证并获取目录
+     * 如果输入的是文件，返回文件所在目录；如果是文件夹，直接返回
+     *
+     * @param path 路径字符串
+     * @return 目录的 File 对象，如果路径无效则返回 null
+     */
+    private static File validateAndGetDirectory(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return null;
+        }
+        
+        File file = new File(path);
+        
+        // 检查文件或目录是否存在
+        if (!file.exists()) {
+            return null;
+        }
+        
+        // 如果是文件，返回其所在目录
+        if (file.isFile()) {
+            return file.getParentFile();
+        }
+        
+        // 如果是目录，直接返回
+        if (file.isDirectory()) {
+            return file;
+        }
+        
+        return null;
     }
 
     /**
